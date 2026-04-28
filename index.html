@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
@@ -10,7 +9,6 @@
 <title>CEO Registry</title>
 
 <!-- Brain + CEO icon (SVG embedded as data URI; works as favicon and home-screen icon) -->
-
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'><rect width='180' height='180' rx='40' fill='%23070b12'/><g transform='translate(90 92)'><path d='M-44 -8 C-50 -22 -38 -38 -22 -36 C-18 -46 -2 -50 8 -42 C20 -48 36 -38 34 -22 C46 -18 48 0 38 10 C44 22 32 38 16 34 C10 44 -8 46 -16 36 C-30 42 -44 30 -40 14 C-50 8 -52 -4 -44 -8 Z' fill='none' stroke='%23c9a96e' stroke-width='4' stroke-linejoin='round'/><path d='M-4 -36 L-4 32 M-22 -28 C-14 -22 -14 -10 -22 -4 M14 -30 C6 -22 6 -10 14 -4 M-30 4 C-22 8 -14 6 -10 0 M22 6 C14 10 6 8 0 2' fill='none' stroke='%23c9a96e' stroke-width='2.5' stroke-linecap='round' opacity='0.55'/></g><text x='90' y='148' font-family='Georgia, serif' font-size='28' font-weight='600' fill='%23c9a96e' text-anchor='middle' letter-spacing='2'>CEO</text></svg>"/>
 <link rel="apple-touch-icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'><rect width='180' height='180' rx='40' fill='%23070b12'/><g transform='translate(90 92)'><path d='M-44 -8 C-50 -22 -38 -38 -22 -36 C-18 -46 -2 -50 8 -42 C20 -48 36 -38 34 -22 C46 -18 48 0 38 10 C44 22 32 38 16 34 C10 44 -8 46 -16 36 C-30 42 -44 30 -40 14 C-50 8 -52 -4 -44 -8 Z' fill='none' stroke='%23c9a96e' stroke-width='4' stroke-linejoin='round'/><path d='M-4 -36 L-4 32 M-22 -28 C-14 -22 -14 -10 -22 -4 M14 -30 C6 -22 6 -10 14 -4 M-30 4 C-22 8 -14 6 -10 0 M22 6 C14 10 6 8 0 2' fill='none' stroke='%23c9a96e' stroke-width='2.5' stroke-linecap='round' opacity='0.55'/></g><text x='90' y='148' font-family='Georgia, serif' font-size='28' font-weight='600' fill='%23c9a96e' text-anchor='middle' letter-spacing='2'>CEO</text></svg>"/>
 
@@ -160,7 +158,6 @@ textarea.inp { resize: none; min-height: 70px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
 </style>
-
 </head>
 <body>
 <div id="app">
@@ -170,6 +167,10 @@ textarea.inp { resize: none; min-height: 70px; }
       <div>
         <div class="hdr-title">CEO Registry</div>
         <div class="hdr-date" id="hdrDate"></div>
+        <div id="syncIndicator" style="display:flex;align-items:center;gap:5px;margin-top:4px">
+          <div class="sync-dot" style="width:6px;height:6px;border-radius:50%;background:#4a5a70;transition:background .3s"></div>
+          <div class="sync-text" style="font-size:9px;color:var(--text3);letter-spacing:.06em"></div>
+        </div>
       </div>
       <div class="hdr-actions">
         <button class="icon-btn" id="importBtn" title="Import">
@@ -209,7 +210,6 @@ textarea.inp { resize: none; min-height: 70px; }
 </div>
 
 <!-- Add/Edit Modal -->
-
 <div class="modal-bg hidden" id="taskModal">
   <div class="modal-sheet">
     <div class="modal-handle"></div>
@@ -252,24 +252,110 @@ let editingId = null;
 const today = new Date().toDateString();
 const todayDayIdx = new Date().getDay();
 
+// ── Cloud Sync Config (JSONbin) ────────────────────────────────
+// Replace these two values with your own:
+const JSONBIN_KEY = '$2a$10$..D/JHeKOB5YBDLDtfSP.ek41FO4jiyxxIXY1FwMzBvliU00d14I2';
+const JSONBIN_BIN_ID = '69f11a66aaba8821974b953b';
+const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
+
+let syncStatus = 'idle'; // 'idle' | 'syncing' | 'synced' | 'error' | 'offline'
+let pendingSave = false;
+let saveTimer = null;
+
+function setSyncStatus(s) {
+  syncStatus = s;
+  const el = document.getElementById('syncIndicator');
+  if (!el) return;
+  const cfg = {
+    idle:    { dot: '#4a5a70', text: '' },
+    syncing: { dot: '#e8c830', text: 'Syncing…' },
+    synced:  { dot: '#3dc9a0', text: 'Synced' },
+    error:   { dot: '#e05060', text: 'Sync error' },
+    offline: { dot: '#8a9ab0', text: 'Offline' }
+  }[s];
+  el.querySelector('.sync-dot').style.background = cfg.dot;
+  el.querySelector('.sync-text').textContent = cfg.text;
+}
+
 // ── Persistence ────────────────────────────────────────────────
-function saveData() {
+function saveLocal() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify({tasks, history})); } catch(e) {}
 }
-function loadData() {
+
+async function saveData() {
+  saveLocal(); // always save locally first (instant + offline backup)
+  // Debounce cloud save by 800ms so rapid edits don't spam the API
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveToCloud, 800);
+}
+
+async function saveToCloud() {
+  if (JSONBIN_KEY === 'PASTE_YOUR_MASTER_KEY_HERE') return;
+  setSyncStatus('syncing');
+  try {
+    const res = await fetch(JSONBIN_URL, {
+      method: 'PUT',
+      headers: {'Content-Type':'application/json', 'X-Master-Key': JSONBIN_KEY},
+      body: JSON.stringify({tasks, history, updatedAt: new Date().toISOString()})
+    });
+    if (!res.ok) throw new Error('Save failed');
+    setSyncStatus('synced');
+    setTimeout(() => { if (syncStatus === 'synced') setSyncStatus('idle'); }, 2000);
+  } catch(e) {
+    setSyncStatus('error');
+  }
+}
+
+async function loadFromCloud() {
+  if (JSONBIN_KEY === 'PASTE_YOUR_MASTER_KEY_HERE') return false;
+  setSyncStatus('syncing');
+  try {
+    const res = await fetch(JSONBIN_URL + '/latest', {
+      headers: {'X-Master-Key': JSONBIN_KEY}
+    });
+    if (!res.ok) throw new Error('Load failed');
+    const data = await res.json();
+    const record = data.record || {};
+    if (Array.isArray(record.tasks)) {
+      tasks = record.tasks;
+      history = record.history || [];
+      saveLocal();
+      setSyncStatus('synced');
+      setTimeout(() => { if (syncStatus === 'synced') setSyncStatus('idle'); }, 2000);
+      return true;
+    }
+  } catch(e) {
+    setSyncStatus('error');
+  }
+  return false;
+}
+
+function loadLocal() {
   try {
     const s = localStorage.getItem(STORAGE_KEY);
-    if (s) { const d = JSON.parse(s); tasks = d.tasks||[]; history = d.history||[]; return; }
+    if (s) { const d = JSON.parse(s); tasks = d.tasks||[]; history = d.history||[]; return true; }
   } catch(e) {}
-  tasks = [
-    {id:1,title:"Review company P&L",frequency:"Monthly",category:"Finance",location:"Baton Rouge",dueDay:"",description:"Deep dive into monthly financials with CFO",completedDates:[],streak:0},
-    {id:2,title:"1-on-1s with direct reports",frequency:"Weekly",category:"People",location:"Ambassador",dueDay:"Fri",description:"30-min check-ins with leadership team",completedDates:[],streak:0},
-    {id:3,title:"Board update memo",frequency:"Monthly",category:"Strategy",location:"",dueDay:"",description:"Prepare board communication on key metrics",completedDates:[],streak:0},
-    {id:4,title:"Investor relations call",frequency:"Quarterly",category:"External",location:"",dueDay:"",description:"Update key investors on company progress",completedDates:[],streak:0},
-    {id:5,title:"Strategic goals review",frequency:"Quarterly",category:"Strategy",location:"University",dueDay:"",description:"Assess progress on OKRs and reforecast",completedDates:[],streak:0},
-    {id:6,title:"Morning journaling",frequency:"Daily",category:"Personal",location:"New Iberia",dueDay:"",description:"Reflect, set priorities, and clear mental space",completedDates:[],streak:0},
-  ];
-  history = [];
+  return false;
+}
+
+async function loadData() {
+  // 1. Show local data instantly (offline-friendly)
+  const hadLocal = loadLocal();
+  if (!hadLocal) {
+    tasks = [
+      {id:1,title:"Review company P&L",frequency:"Monthly",category:"Finance",location:"Baton Rouge",dueDay:"",description:"Deep dive into monthly financials with CFO",completedDates:[],streak:0},
+      {id:2,title:"1-on-1s with direct reports",frequency:"Weekly",category:"People",location:"Ambassador",dueDay:"Fri",description:"30-min check-ins with leadership team",completedDates:[],streak:0},
+      {id:3,title:"Board update memo",frequency:"Monthly",category:"Strategy",location:"",dueDay:"",description:"Prepare board communication on key metrics",completedDates:[],streak:0},
+      {id:4,title:"Investor relations call",frequency:"Quarterly",category:"External",location:"",dueDay:"",description:"Update key investors on company progress",completedDates:[],streak:0},
+      {id:5,title:"Strategic goals review",frequency:"Quarterly",category:"Strategy",location:"University",dueDay:"",description:"Assess progress on OKRs and reforecast",completedDates:[],streak:0},
+      {id:6,title:"Morning journaling",frequency:"Daily",category:"Personal",location:"New Iberia",dueDay:"",description:"Reflect, set priorities, and clear mental space",completedDates:[],streak:0},
+    ];
+    history = [];
+  }
+  render();
+  // 2. Then try to fetch fresh data from cloud
+  const fetched = await loadFromCloud();
+  if (fetched) render();
 }
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -611,9 +697,10 @@ document.getElementById('importFile').addEventListener('change', e => {
 });
 
 // ── Boot ───────────────────────────────────────────────────────
+window.addEventListener('online', () => { setSyncStatus('idle'); saveToCloud(); });
+window.addEventListener('offline', () => setSyncStatus('offline'));
+if (!navigator.onLine) setSyncStatus('offline');
 loadData();
-render();
 </script>
-
 </body>
 </html>
