@@ -235,7 +235,7 @@ textarea.inp { resize: none; min-height: 70px; }
 
 <script>
 // ── Constants ──────────────────────────────────────────────────
-const FREQ = ["Daily","Weekly","Monthly","Quarterly","Yearly"];
+const FREQ = ["One-time","Daily","Weekly","Monthly","Quarterly","Yearly"];
 const CATS = ["Strategy","Finance","People","Operations","External","Personal"];
 const LOCS = ["University","Ambassador","Baton Rouge","New Iberia"];
 const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
@@ -417,7 +417,7 @@ function cardHTML(t) {
           <span class="pill" style="background:${acc}18;color:${acc}">${t.category}</span>
           <span class="pill" style="background:var(--bg3);color:var(--text2)">${t.frequency}</span>
           ${t.frequency==='Weekly'&&t.dueDay ? `<span class="pill" style="background:${ov?'rgba(224,80,96,.15)':'rgba(201,169,110,.12)'};color:${ov?'var(--red)':'var(--gold)'}">${ov?'⚠ Overdue · ':'Due '}${t.dueDay}</span>` : ''}
-          ${t.streak>0 ? `<span class="pill" style="background:rgba(248,160,96,.1);color:#f8a060">🔥 ${t.streak}</span>` : ''}
+          ${t.streak>0 && t.frequency!=='One-time' ? `<span class="pill" style="background:rgba(248,160,96,.1);color:#f8a060">🔥 ${t.streak}</span>` : ''}
           ${t.location&&LOC_COLOR[t.location] ? `<span class="pill" style="background:${LOC_COLOR[t.location].bg};color:${LOC_COLOR[t.location].c}">📍 ${t.location}</span>` : ''}
         </div>
       </div>
@@ -449,6 +449,11 @@ function toggleComplete(id) {
     t.completedDates.push(today);
     if (!ov) t.streak++;
     history.push({taskId: id, taskTitle: t.title, completedAt: today, category: t.category, location: t.location||''});
+    // One-time tasks: remove from active list once completed (still kept in history)
+    if (t.frequency === 'One-time') {
+      tasks = tasks.filter(x => x.id !== id);
+      showToast('Task completed & archived');
+    }
   }
   saveData(); render();
 }
